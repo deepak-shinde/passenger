@@ -28,12 +28,14 @@
 
 #include <boost/cstdint.hpp>
 #include <oxt/backtrace.hpp>
+#include <oxt/macros.hpp>
 #include <stdexcept>
 #include <cstring>
 #include <cassert>
 #include <algorithm>
 #include <MemoryKit/palloc.h>
 #include <MemoryKit/mbuf.h>
+#include <Logging.h>
 #include <StaticString.h>
 #include <Utils/StrIntUtils.h>
 #include <Utils/Hasher.h>
@@ -99,7 +101,7 @@ psg_lstr_init(LString *str) {
 inline LString *
 psg_lstr_create(psg_pool_t *pool, const char *data, unsigned int size) {
 	LString *result = (LString *) psg_palloc(pool, sizeof(LString));
-	if (result == NULL) {
+	if (OXT_UNLIKELY(result == NULL)) {
 		TRACE_POINT();
 		throw std::bad_alloc();
 	}
@@ -114,7 +116,7 @@ psg_lstr_create(psg_pool_t *pool, const StaticString &str) {
 }
 
 inline void
-psg_lstr_append_part(LString *str, LString::Part *part) {
+_psg_lstr_append_part(LString *str, LString::Part *part) {
 	if (str->size == 0) {
 		str->start = part;
 		str->end = part;
@@ -127,36 +129,28 @@ psg_lstr_append_part(LString *str, LString::Part *part) {
 }
 
 inline void
-psg_lstr_append_part_from_another_lstr(LString *str, psg_pool_t *pool, const LString::Part *part) {
-	LString::Part *copy = (LString::Part *) psg_palloc(pool, sizeof(LString::Part));
-	if (copy == NULL) {
-		TRACE_POINT();
-		throw std::bad_alloc();
-	}
-	*copy = *part;
-	if (part->mbuf_block != NULL) {
-		mbuf_block_ref(part->mbuf_block);
-	}
-	psg_lstr_append_part(str, copy);
-}
-
-inline void
 psg_lstr_append(LString *str, psg_pool_t *pool, const MemoryKit::mbuf &buffer,
 	const char *data, unsigned int size)
 {
 	if (size == 0) {
 		return;
 	}
+
+	assert(data >= buffer.start);
+	assert(data + size <= buffer.end);
+
 	LString::Part *part = (LString::Part *) psg_palloc(pool, sizeof(LString::Part));
-	if (part == NULL) {
+	if (OXT_UNLIKELY(part == NULL)) {
 		TRACE_POINT();
 		throw std::bad_alloc();
 	}
+
+	// part->next is set to NULL by psg_lstr_append_part()
 	part->mbuf_block = buffer.mbuf_block;
 	part->data = data;
 	part->size = size;
 	mbuf_block_ref(buffer.mbuf_block);
-	psg_lstr_append_part(str, part);
+	_psg_lstr_append_part(str, part);
 }
 
 inline void
@@ -169,21 +163,44 @@ psg_lstr_append(LString *str, psg_pool_t *pool, const char *data, unsigned int s
 	if (size == 0) {
 		return;
 	}
+
 	LString::Part *part = (LString::Part *) psg_palloc(pool, sizeof(LString::Part));
-	if (part == NULL) {
+	if (OXT_UNLIKELY(part == NULL)) {
 		TRACE_POINT();
 		throw std::bad_alloc();
 	}
-	part->next = NULL;
+
+	// part->next is set to NULL by psg_lstr_append_part()
 	part->mbuf_block = NULL;
 	part->data = data;
 	part->size = size;
-	psg_lstr_append_part(str, part);
+	_psg_lstr_append_part(str, part);
 }
 
 inline void
 psg_lstr_append(LString *str, psg_pool_t *pool, const char *data) {
 	psg_lstr_append(str, pool, data, strlen(data));
+}
+
+/**
+ * Move the parts in `from` to the end of `to`.
+ */
+inline void
+psg_lstr_move_and_append(LString *from, psg_pool_t *pool, LString *to) {
+	if (OXT_LIKELY(from != to)) {
+		if (from->size == 0) {
+			return;
+		}
+
+		if (to->size == 0) {
+			*to = *from;
+		} else {
+			to->end->next = from->start;
+			to->end = from->end;
+			to->size += from->size;
+		}
+		psg_lstr_init(from);
+	}
 }
 
 inline LString *
@@ -193,7 +210,7 @@ psg_lstr_null_terminate(const LString *str, psg_pool_t *pool) {
 	char *data, *pos;
 
 	data = (char *) psg_pnalloc(pool, str->size + 1);
-	if (data == NULL) {
+	if (OXT_UNLIKELY(data == NULL)) {
 		TRACE_POINT();
 		throw std::bad_alloc();
 	}
@@ -208,10 +225,11 @@ psg_lstr_null_terminate(const LString *str, psg_pool_t *pool) {
 	*pos = '\0';
 
 	newstr = (LString *) psg_palloc(pool, sizeof(LString));
-	if (newstr == NULL) {
+	if (OXT_UNLIKELY(newstr == NULL)) {
 		TRACE_POINT();
 		throw std::bad_alloc();
 	}
+
 	psg_lstr_init(newstr);
 	psg_lstr_append(newstr, pool, data, str->size);
 	return newstr;
@@ -413,6 +431,10 @@ psg_lstr_deinit(LString *str) {
 
 	for (part = str->start; part != NULL; part = part->next) {
 		if (part->mbuf_block != NULL) {
+			P_DEBUG("Unreferencing LString " << (void *) str << " part "
+				<< (void *) part << ": \""
+				<< cEscapeString(StaticString(part->data, part->size))
+				<< "\"");
 			mbuf_block_unref(part->mbuf_block);
 		}
 	}

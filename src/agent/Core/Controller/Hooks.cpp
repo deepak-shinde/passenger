@@ -218,6 +218,7 @@ Controller::deinitializeAppResponse(Client *client, Request *req) {
 		resp->parserState.headerParser = NULL;
 	}
 
+	P_DEBUG("deinitializeAppResponse: destroying resp->headers");
 	ServerKit::HeaderTable::Iterator it(resp->headers);
 	while (*it != NULL) {
 		psg_lstr_deinit(&it->header->key);
@@ -226,6 +227,7 @@ Controller::deinitializeAppResponse(Client *client, Request *req) {
 		it.next();
 	}
 
+	P_DEBUG("deinitializeAppResponse: destroying resp->secureHeaders");
 	it = ServerKit::HeaderTable::Iterator(resp->secureHeaders);
 	while (*it != NULL) {
 		psg_lstr_deinit(&it->header->key);
@@ -238,9 +240,12 @@ Controller::deinitializeAppResponse(Client *client, Request *req) {
 	resp->secureHeaders.clear();
 
 	if (resp->setCookie != NULL) {
+		P_DEBUG("deinitializeAppResponse: destroying resp->setCookie");
 		psg_lstr_deinit(resp->setCookie);
 	}
+	P_DEBUG("deinitializeAppResponse: destroying resp->bodyCacheBuffer");
 	psg_lstr_deinit(&resp->bodyCacheBuffer);
+	P_DEBUG("deinitializeAppResponse done");
 }
 
 ServerKit::Channel::Result
