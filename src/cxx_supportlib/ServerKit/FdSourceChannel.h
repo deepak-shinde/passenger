@@ -73,6 +73,7 @@ private:
 
 		for (i = 0; i < burstReadCount && !done; i++) {
 			if (buffer.empty()) {
+				P_NOTICE("FdSourceChannel: checkout new mbuf (thread signature = " << oxt::thread_signature << ")");
 				buffer = MemoryKit::mbuf_get(&ctx->mbuf_pool);
 			}
 
